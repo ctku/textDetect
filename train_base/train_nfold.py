@@ -1,134 +1,89 @@
-#Train by n-fold cross-validation
-################################################################################
-# using libSVM
-# -s svm_type : set type of SVM (default 0)
-#	0 -- C-SVC
-#	1 -- nu-SVC
-#	2 -- one-class SVM
-# -t kernel_type : set type of kernel function (default 2)
-#	0 -- linear: u'*v
-#	1 -- polynomial: (gamma*u'*v + coef0)^degree
-#	2 -- radial basis function: exp(-gamma*|u-v|^2)
-# -wi weight : set the parameter C of class i to weight*C, for C-SVC (default 1)
-#              set higher weight to minority class
-################################################################################
+def svmExperiment(fv_set,fv_ID,fv_name,file_name,out_name,v):
+    # fv_set: a list of list, consist of feature vectors
+    # fv_ID: node ID of features
+    # v: fold of cross-validation
+    # file_name: name of the file of extracted features
+    # fv_name = [w for w in uni_desc_set] + [w for w in bi_desc_set] + ['class']
+    # out_name: name of output file consisting of classification result for each node
+    fv1 = [w for w in fv_set if w[-1]==1]
+    fv2 = [w for w in fv_set if w[-1]==-1]
+    ID1 = [fv_ID[i] for i in range(len(fv_ID)) if fv_set[i][-1]==1]
+    ID2 = [fv_ID[i] for i in range(len(fv_ID)) if fv_set[i][-1]==-1]
+    step1 = len(fv1)/v
+    step2 = len(fv2)/v
+    precision = 0
+    recall = 0
+    accuracy = 0
+    out_ID = []  # output node ID
+    out_TC = []  # output true class label 
+    out_CC = []  # output classification result
+    out_SS = []  # output score 
+    out_FF = []  # output fold ID
+    for i in range(v):
+        if i<v-1:
+            test_range_1 = range(step1*i,step1*(i+1))
+            test_range_2 = range(step2*i,step2*(i+1))
+        else:
+            test_range_1 = range(step1*i,len(fv1))
+            test_range_2 = range(step2*i,len(fv2))
+        fv1_test = [fv1[j] for j in test_range_1]
+        fv2_test = [fv2[j] for j in test_range_2]
+        ID1_test = [ID1[j] for j in test_range_1]
+        ID2_test = [ID2[j] for j in test_range_2]
+        fv1_train = [fv1[j] for j in range(len(fv1)) if j not in test_range_1]
+        fv2_train = [fv2[j] for j in range(len(fv2)) if j not in test_range_2]
+        csv_test = open(file_name + '_test.csv','w')
+        csv_train = open(file_name + '_train.csv','w')
+        
+        fv_writer = csv.writer(csv_test)
+        fv_writer.writerow(fv_name)
+        fv_writer.writerows(fv1_test)
+        fv_writer.writerows(fv2_test)
+        csv_test.close()
+        CSV2SVM(file_name + '_test.csv', file_name + '_test.dat')
+        
+        fv_writer = csv.writer(csv_train)
+        fv_writer.writerow(fv_name)
+        fv_writer.writerows(fv1_train)
+        fv_writer.writerows(fv2_train)
+        csv_train.close()
+        CSV2SVM(file_name + '_train.csv', file_name + '_train.dat')
+        j = len(ID2_test)/float(len(ID1_test))
+        os.system('./svm_learn -j '+str(j)+' '+ file_name + '_train.dat ' + file_name + '_model')
+        os.system('./svm_classify ' + file_name + '_test.dat ' + file_name + '_model ' + file_name + '_out_v' + str(i+1))
+        # read svm output
+        outF = open(file_name+'_out_v'+str(i+1),'r')
+        output_reader = outF.read()
+        lines = output_reader.split('\n')
+        prediction = [float(s) for s in lines if len(s)>0]
+        cc = [int(w>0)*2-1 for w in prediction]
+        out_TC = out_TC + [1]*len(ID1_test) + [-1]*len(ID2_test)
+        out_CC = out_CC + cc
+        out_ID = out_ID + ID1_test + ID2_test
+        out_SS = out_SS + prediction
+        out_FF = out_FF + [i]*len(cc)
+    f = open(out_name,'w')
+    out_writer = csv.writer(f,delimiter='\t')
+    for i in range(len(out_CC)):
+        row = [out_ID[i], out_TC[i], out_CC[i], out_SS[i], out_FF[i]]
+        out_writer.writerow(row)
+    f.close()
 
-def experiment_libsvm(fold, data, id_map, params):
-    # fold: fold for cross-validation
-    # id_map: mapping from index of a node to its attribute ID
-    # params: specify parameters used in experiment
-    # random sampling testing and training data given number of pos and neg training and testing samples
-    # ID of data[k] = id_map[k]
-    ave_accuracy = 0
-    ave_precision = 0
-    ave_recall = 0
 
-    false_neg_node = [0]*len(data)
-    false_pos_node = [0]*len(data)
-
-    f1 = open(false_pos_file,'w')
-    f2 = open(false_neg_file,'w')
-    f3 = open(result_file_name,'w')
-   # f4 = open(svm_weight_file,'w') # summation of weights from different folds of training using linear SVM
-    w1 = csv.writer(f1,delimiter = '\n')
-    w2 = csv.writer(f2,delimiter = '\n')
-    w3 = csv.writer(f3,delimiter = '\t')
-  #  w4 = csv.writer(f4,delimiter = '\n')
-    
-    pos_data_idx = [id for id in range(len(data)) if data[id][0][0]=='1'] # error0
-    neg_data_idx = [id for id in range(len(data)) if data[id][0][0]=='0'] # not error
-    
-    if params[0] == 1:
-        train_num_pos = params[1]
-        train_num_neg = params[2]
-        test_num_pos = params[3]
-        test_num_neg = params[4]
-        ww0 = params[5]
-        ww1 = params[6]
-    elif params[0] == 2:
-        num_train_neg = params[1]
-        ww0 = params[2]
-        ww1 = params[3]
-        # split data into different folds
-        fold_idx = [[]]*fold
-        nn = int(len(data)/fold)
-        for j in range(fold):
-            fold_idx[j] = range(j*nn,(j+1)*nn)        
-    
-    # weight = [0] * fv_num
-    
-    for ii in range(fold):
-        print 'fold %d:\n' % ii
-        if params[0] == 1:
-            # test_ID = {k: data[k] in test set}
-            test_ID = data_preparation_random(data, train_num_pos, train_num_neg, test_num_pos, test_num_neg, pos_data_idx, 
-neg_data_idx) 
-        elif params[0] == 2:
-            test_ID = data_preparation_v2(data, fold_idx, num_train_neg, ii)
-            
-        print 'start svm training\n'
-        svm_cmd1 = './libsvm/svm-scale -l 0 -u 1 -s range %s > %s' % (train_file_name, train_file_name+'.scale')
-        os.system(svm_cmd1)
-        
-        svm_cmd2 = './libsvm/svm-scale -r range %s > %s' % (test_file_name, test_file_name+'.scale')
-        os.system(svm_cmd2)
-
-        svm_cmd3 = './libsvm/svm-train -s 0 -t 0 -w1 %d -w0 %d %s' % (ww1, ww0, train_file_name+'.scale')
-        os.system(svm_cmd3)
-        
-        # find_SVM_weight(fv_num,train_file_name+'.scale.model',weight)
-        
-        print 'start svm testing\n'
-        svm_cmd4 = './libsvm/svm-predict %s %s %s' % (test_file_name+'.scale', train_file_name+'.scale.model', 
-svm_output_file_name)
-        os.system(svm_cmd4)
-        
-        # evaluation
-        predict_label = [int(w[0][0]) for w in csv.reader(open(svm_output_file_name,'rb'))]
-        true_label = [int(w[0][0]) for w in csv.reader(open(test_file_name,'rb'))]
-        
-        N = len(predict_label)
-        
-        true_pos =[i for i in range(N) if predict_label[i]==true_label[i] and predict_label[i]==1]
-        false_pos = [i for i in range(N) if predict_label[i]!=true_label[i] and predict_label[i]==1]
-        true_neg = [i for i in range(N) if predict_label[i]==true_label[i] and predict_label[i]==0]
-        false_neg = [i for i in range(N) if predict_label[i]!=true_label[i] and predict_label[i]==0]
-        accuracy = (len(true_pos)+len(true_neg))/float(N)
-        precision = len(true_pos)/float(len(true_pos)+len(false_pos))
-        recall = len(true_pos)/float(len(true_pos)+len(false_neg))
-        print "accuracy = %f, precision = %f, recall = %f" % (accuracy, precision, recall)
-        ave_accuracy = ave_accuracy + accuracy
-        ave_precision = ave_precision + precision
-        ave_recall = ave_recall+ recall
-        # find false nodes
-        for id in false_pos:
-            false_pos_node[test_ID[id]] +=1
-        
-        for id in false_neg:
-            false_neg_node[test_ID[id]] +=1
-        
-        ID_pred_pair = [[id_map[test_ID[i]],predict_label[i]] for i in range(N)]
-        w3.writerows(ID_pred_pair)
-           
-    ave_accuracy = ave_accuracy/fold
-    ave_precision = ave_precision/fold
-    ave_recall = ave_recall/fold
-    ave_F = 2*ave_precision*ave_recall/(ave_precision+ave_recall)
-    print "Average: accuracy = %f, precision = %f, recall = %f" % (ave_accuracy, ave_precision, ave_recall)
-    false_pos_ID = [id_map[id] for id in range(len(data)) if false_pos_node[id]>0]
-    false_neg_ID = [id_map[id] for id in range(len(data)) if false_neg_node[id]>0]
-    
-    print "number of false positive nodes = %d \n" % len(false_pos_ID)
-    print "number of false negative nodes = %d \n" % len(false_neg_ID)
-    #print "search %f of all nodes can find %f errors\n" % (float(len(false_pos_ID)+len(true_pos_ID))/len(data), 
-ave_recall)
-   # f4_data = ["%s:%s" % (i+1,weight[i]) for i in range(len(weight))]  
-    w1.writerow(false_pos_ID)
-    w2.writerow(false_neg_ID)
-   # w4.writerow(f4_data)
-    f1.close()
-    f2.close()
-    f3.close()
-    #f4.close()
-
-return [ave_accuracy, ave_precision, ave_recall, ave_F]
+def CSV2SVM(csv_file, dat_file):
+    """
+    Convert a csv file into the format used in libsvm
+    csv_file: each row consists of [Feature Vectors] [True Label]
+    dat_file: format used in libsvm
+    """
+    csv_f = open(csv_file,'rb') 
+    csv_reader = csv.reader(csv_f)
+    csv_data = [w for w in csv_reader]  
+    csv_f.close()
+    csv_data = csv_data[1:]
+    svm_file = open(dat_file,'wb')
+    svm_writer = csv.writer(svm_file,delimiter = ' ')
+    for data in csv_data:
+        data = [data[-1]]+["%s:%s" % (x+1,data[x]) for x in range(len(data)-1) if float(data[x])!=0] # index starts from 1
+        svm_writer.writerow(data)
+    svm_file.close()
